@@ -79,6 +79,15 @@ In the terminal:
 - space: arm/disarm
 - t: takeoff
 - l: land
+- w: move foward
+- s: move back
+- a: move left
+- d: move right
+- c: move up
+- v: move down
+- z: rotate counter-clockwise
+- x: rotate clockwise
+- h: return to home
 
 ## Atention!
 Change your directory in the commands of src/px4_control/px4_control/processes.py

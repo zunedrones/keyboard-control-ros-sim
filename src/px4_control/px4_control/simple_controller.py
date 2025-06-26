@@ -52,6 +52,7 @@ class OffboardControl(Node):
         self.vehicle_local_position = VehicleLocalPosition()
         self.vehicle_status = VehicleStatus()
         self.takeoff_height = -5.0
+        self.yaw_setpoint = 1.57079  # 90 degrees in radians
 
         # Controle de tempo para pouso
         self.reached_takeoff_height = False
@@ -69,6 +70,49 @@ class OffboardControl(Node):
     def arm(self):
         self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=1.0)
         self.get_logger().info('Arm command sent')
+        
+    def move(self, direction: str):
+        if direction.lower() == 'f':
+            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y + 1, 
+                                           self.vehicle_local_position.z)
+            self.get_logger().info("Moving forward")
+        elif direction.lower() == 'b':
+            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y - 1, 
+                                           self.vehicle_local_position.z)
+            self.get_logger().info("Moving backward")
+        elif direction.lower() == 'l':
+            self.publish_position_setpoint(self.vehicle_local_position.x + 1, self.vehicle_local_position.y, 
+                                           self.vehicle_local_position.z)
+            self.get_logger().info("Moving left")
+        elif direction.lower() == 'r':
+            self.publish_position_setpoint(self.vehicle_local_position.x - 1, self.vehicle_local_position.y, 
+                                           self.vehicle_local_position.z)
+            self.get_logger().info("Moving right")
+        if direction.lower() == 'u':
+            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y, 
+                                           self.vehicle_local_position.z - 1.0)
+            self.get_logger().info("Moving up")
+        elif direction.lower() == 'd':
+            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y, self.vehicle_local_position.z + 1.0)
+            self.get_logger().info("Moving down")
+    
+    def rotate(self, direction: str):
+        if direction.lower() == 'z':
+            # Rotate counter-clockwise
+            self.yaw_setpoint -= 0.174533  # 10 graus
+            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y, 
+                                           self.vehicle_local_position.z)
+            self.get_logger().info("Rotating counter-clockwise")
+        elif direction.lower() == 'x':
+            # Rotate clockwise
+            self.yaw_setpoint += 0.174533  # 10 graus
+            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y, 
+                                           self.vehicle_local_position.z)
+            self.get_logger().info("Rotating clockwise")
+    
+    def return_to_home(self):
+        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_RETURN_TO_LAUNCH)
+        self.get_logger().info("Return to home command sent")
 
     def disarm(self):
         self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=0.0)
@@ -95,10 +139,10 @@ class OffboardControl(Node):
     def publish_position_setpoint(self, x: float, y: float, z: float):
         msg = TrajectorySetpoint()
         msg.position = [x, y, z]
-        msg.yaw = 1.57079  # 90 graus
+        msg.yaw = self.yaw_setpoint
         msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
         self.trajectory_setpoint_publisher.publish(msg)
-        self.get_logger().info(f"Publishing position setpoints: {[x, y, z]}")
+        # self.get_logger().info(f"Publishing position setpoints: {[x, y, z]}")
 
     def publish_vehicle_command(self, command, **params):
         msg = VehicleCommand()
@@ -122,22 +166,64 @@ class OffboardControl(Node):
         try:
             key = sys.stdin.read(1)
             if key == ' ':
+                # Arma ou desarma
                 if self.armed:
+                    self.get_logger().info("Desarmando o veículo")
                     self.disarm()
                     self.armed = False
                     self.offboard_mode = False
                     self.takeoff_active = False
                 else:
+                    self.get_logger().info("Armando o veículo")
                     self.arm()
                     self.engage_offboard_mode()
                     self.armed = True
                     self.offboard_mode = True
             elif key == 't' and self.armed and self.offboard_mode:
+                # Takeoff
                 self.takeoff_active = True
                 self.get_logger().info("Iniciando decolagem")
             elif key == 'l' and self.armed and self.offboard_mode:
+                # Land
                 self.land()
+                self.get_logger().info("Iniciando pouso")
                 self.takeoff_active = False
+            elif key == 'w' and self.takeoff_active and self.offboard_mode:
+                # Move front
+                self.get_logger().info("Movendo para frente")
+                self.move('f')
+            elif key == 's' and self.takeoff_active and self.offboard_mode:
+                # Move back
+                self.get_logger().info("Movendo para trás")
+                self.move('b')
+            elif key == 'a' and self.takeoff_active and self.offboard_mode:
+                # Move left
+                self.get_logger().info("Movendo para a esquerda")
+                self.move('l')
+            elif key == 'd' and self.takeoff_active and self.offboard_mode:
+                # Move right
+                self.get_logger().info("Movendo para a direita")
+                self.move('r')
+            elif key == 'c' and self.takeoff_active and self.offboard_mode:
+                # Move up
+                self.get_logger().info("Movendo para cima")
+                self.move('u')
+            elif key == 'v' and self.takeoff_active and self.offboard_mode:
+                # Move down
+                self.get_logger().info("Movendo para baixo")
+                self.move('d')
+            elif key == 'z' and self.takeoff_active and self.offboard_mode:
+                # Rotate counter-clockwise
+                self.get_logger().info("Girando anti-horário")
+                self.rotate('z')
+            elif key == 'x' and self.takeoff_active and self.offboard_mode:
+                # Rotate clockwise
+                self.get_logger().info("Girando horário")
+                self.rotate('x')    
+            elif key == 'h' and self.takeoff_active and self.offboard_mode:
+                # Return to home
+                self.get_logger().info("Retornando para casa")
+                self.return_to_home()
         except IOError:
             pass
 
@@ -154,15 +240,26 @@ class OffboardControl(Node):
 
 def main(args=None) -> None:
     print('Starting offboard control node...')
-    print("Esperando")
-    time.sleep(17)
-    print("Escutando")
+    time.sleep(13)
+ 
+    print("' ' para armar/desarmar")
+    print("'t' para decolar")
+    print("'l' para pousar")
+    print("'w' para frente")
+    print("'s' para trás")
+    print("'a' para esquerda")
+    print("'d' para direita")
+    print("'c' para cima")
+    print("'v' para baixo")
+    print("'z' para girar anti-horário")
+    print("'x' para girar horário")
+    print("'h' para retornar para casa")
+    
     rclpy.init(args=args)
     offboard_control = OffboardControl()
     rclpy.spin(offboard_control)
     offboard_control.destroy_node()
     rclpy.shutdown()
-
 
 if __name__ == '__main__':
     try:
