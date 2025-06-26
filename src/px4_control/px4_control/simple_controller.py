@@ -7,6 +7,7 @@ import sys
 import termios
 import fcntl
 import os
+import math
 
 class OffboardControl(Node):
     """Node for controlling a vehicle in offboard mode."""
@@ -51,7 +52,6 @@ class OffboardControl(Node):
         self.takeoff_active = False
         self.vehicle_local_position = VehicleLocalPosition()
         self.vehicle_status = VehicleStatus()
-        self.takeoff_height = -5.0
         self.yaw_setpoint = 1.57079  # 90 degrees in radians
 
         # Controle de tempo para pouso
@@ -60,73 +60,34 @@ class OffboardControl(Node):
 
         # Timer para controle
         self.timer = self.create_timer(0.1, self.timer_callback)  # 10 Hz
+        
+        # Constantes
+        self.MIN_TAKEOFF_HEIGHT = -1.5  # Altura mínima para considerar que o drone decolou
+        self.TAKEOFF_HEIGHT = -5.0      # Altura de decolagem em metros
 
-    def vehicle_local_position_callback(self, msg):
+    def vehicle_local_position_callback(self, msg) -> None:
+        """
+        Callback que atualiza a posição local do veículo.
+
+        Args:
+            msg (VehicleLocalPosition): Mensagem recebida com os dados de posição local.
+        """
         self.vehicle_local_position = msg
 
-    def vehicle_status_callback(self, msg):
+    def vehicle_status_callback(self, msg) -> None:
+        """
+        Callback que atualiza o status do veículo.
+
+        Args:
+            msg (VehicleStatus): Mensagem recebida com o status atual do drone.
+        """
         self.vehicle_status = msg
-
-    def arm(self):
-        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=1.0)
-        self.get_logger().info('Arm command sent')
-        
-    def move(self, direction: str):
-        if direction.lower() == 'f':
-            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y + 1, 
-                                           self.vehicle_local_position.z)
-            self.get_logger().info("Moving forward")
-        elif direction.lower() == 'b':
-            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y - 1, 
-                                           self.vehicle_local_position.z)
-            self.get_logger().info("Moving backward")
-        elif direction.lower() == 'l':
-            self.publish_position_setpoint(self.vehicle_local_position.x + 1, self.vehicle_local_position.y, 
-                                           self.vehicle_local_position.z)
-            self.get_logger().info("Moving left")
-        elif direction.lower() == 'r':
-            self.publish_position_setpoint(self.vehicle_local_position.x - 1, self.vehicle_local_position.y, 
-                                           self.vehicle_local_position.z)
-            self.get_logger().info("Moving right")
-        if direction.lower() == 'u':
-            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y, 
-                                           self.vehicle_local_position.z - 1.0)
-            self.get_logger().info("Moving up")
-        elif direction.lower() == 'd':
-            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y, self.vehicle_local_position.z + 1.0)
-            self.get_logger().info("Moving down")
     
-    def rotate(self, direction: str):
-        if direction.lower() == 'z':
-            # Rotate counter-clockwise
-            self.yaw_setpoint -= 0.174533  # 10 graus
-            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y, 
-                                           self.vehicle_local_position.z)
-            self.get_logger().info("Rotating counter-clockwise")
-        elif direction.lower() == 'x':
-            # Rotate clockwise
-            self.yaw_setpoint += 0.174533  # 10 graus
-            self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y, 
-                                           self.vehicle_local_position.z)
-            self.get_logger().info("Rotating clockwise")
-    
-    def return_to_home(self):
-        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_RETURN_TO_LAUNCH)
-        self.get_logger().info("Return to home command sent")
-
-    def disarm(self):
-        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=0.0)
-        self.get_logger().info('Disarm command sent')
-
-    def engage_offboard_mode(self):
-        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=6.0)
-        self.get_logger().info("Switching to offboard mode")
-
-    def land(self):
-        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_LAND)
-        self.get_logger().info("Land command sent")
-
-    def publish_offboard_control_heartbeat_signal(self):
+    def publish_offboard_control_heartbeat_signal(self) -> None:
+        """
+        Publica o sinal de heartbeat necessário para manter o modo offboard ativo.
+        Esse sinal deve ser enviado periodicamente.
+        """
         msg = OffboardControlMode()
         msg.position = True
         msg.velocity = False
@@ -136,7 +97,15 @@ class OffboardControl(Node):
         msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
         self.offboard_control_mode_publisher.publish(msg)
 
-    def publish_position_setpoint(self, x: float, y: float, z: float):
+    def publish_position_setpoint(self, x: float, y: float, z: float) -> None:
+        """
+        Publica um TrajectorySetpoint com uma posição desejada e yaw atual.
+
+        Args:
+            x (float): Coordenada X desejada (norte).
+            y (float): Coordenada Y desejada (leste).
+            z (float): Coordenada Z desejada (altura negativa em NED).
+        """
         msg = TrajectorySetpoint()
         msg.position = [x, y, z]
         msg.yaw = self.yaw_setpoint
@@ -144,7 +113,14 @@ class OffboardControl(Node):
         self.trajectory_setpoint_publisher.publish(msg)
         # self.get_logger().info(f"Publishing position setpoints: {[x, y, z]}")
 
-    def publish_vehicle_command(self, command, **params):
+    def publish_vehicle_command(self, command, **params) -> None:
+        """
+        Publica um comando de controle geral para o drone.
+
+        Args:
+            command (int): Código do comando (ex: armar, mudar modo, pousar, etc).
+            **params: Parâmetros adicionais (param1 a param7) definidos pela especificação MAVLink.
+        """
         msg = VehicleCommand()
         msg.command = command
         msg.param1 = params.get("param1", 0.0)
@@ -161,82 +137,184 @@ class OffboardControl(Node):
         msg.from_external = True
         msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
         self.vehicle_command_publisher.publish(msg)
+        
+    def engage_offboard_mode(self) -> None:
+        """
+        Ativa o modo offboard, necessário para controlar o drone via setpoints.
+        """
+        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=6.0)
+        self.get_logger().info("Switching to offboard mode")
 
-    def timer_callback(self):
-        try:
-            key = sys.stdin.read(1)
-            if key == ' ':
-                # Arma ou desarma
-                if self.armed:
-                    self.get_logger().info("Desarmando o veículo")
-                    self.disarm()
-                    self.armed = False
-                    self.offboard_mode = False
-                    self.takeoff_active = False
-                else:
-                    self.get_logger().info("Armando o veículo")
-                    self.arm()
-                    self.engage_offboard_mode()
-                    self.armed = True
-                    self.offboard_mode = True
-            elif key == 't' and self.armed and self.offboard_mode:
-                # Takeoff
-                self.takeoff_active = True
-                self.get_logger().info("Iniciando decolagem")
-            elif key == 'l' and self.armed and self.offboard_mode:
-                # Land
-                self.land()
-                self.get_logger().info("Iniciando pouso")
-                self.takeoff_active = False
-            elif key == 'w' and self.takeoff_active and self.offboard_mode:
-                # Move front
-                self.get_logger().info("Movendo para frente")
-                self.move('f')
-            elif key == 's' and self.takeoff_active and self.offboard_mode:
-                # Move back
-                self.get_logger().info("Movendo para trás")
-                self.move('b')
-            elif key == 'a' and self.takeoff_active and self.offboard_mode:
-                # Move left
-                self.get_logger().info("Movendo para a esquerda")
-                self.move('l')
-            elif key == 'd' and self.takeoff_active and self.offboard_mode:
-                # Move right
-                self.get_logger().info("Movendo para a direita")
-                self.move('r')
-            elif key == 'c' and self.takeoff_active and self.offboard_mode:
-                # Move up
-                self.get_logger().info("Movendo para cima")
-                self.move('u')
-            elif key == 'v' and self.takeoff_active and self.offboard_mode:
-                # Move down
-                self.get_logger().info("Movendo para baixo")
-                self.move('d')
-            elif key == 'z' and self.takeoff_active and self.offboard_mode:
-                # Rotate counter-clockwise
-                self.get_logger().info("Girando anti-horário")
-                self.rotate('z')
-            elif key == 'x' and self.takeoff_active and self.offboard_mode:
-                # Rotate clockwise
-                self.get_logger().info("Girando horário")
-                self.rotate('x')    
-            elif key == 'h' and self.takeoff_active and self.offboard_mode:
-                # Return to home
-                self.get_logger().info("Retornando para casa")
-                self.return_to_home()
-        except IOError:
-            pass
+    def arm(self) -> None:
+        """
+        Envia comando para armar o veículo (ativar os motores).
+        """
+        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=1.0)
+        self.get_logger().info('Arm command sent')
+    
+    def disarm(self) -> None:
+        """
+        Envia comando para desarmar o veículo (desligar os motores).
+        """
+        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=0.0)
+        self.get_logger().info('Disarm command sent')
+        
+    def move(self, direction: str, distance: float = 1.0) -> None:
+        """
+        Move o drone em uma direção relativa ao seu corpo.
 
-        # Publica heartbeat constantemente
-        self.publish_offboard_control_heartbeat_signal()
+        Args:
+            direction (str): Direção do movimento. Pode ser:
+                'f' (frente), 'b' (trás), 'l' (esquerda), 'r' (direita), 
+                'u' (cima), 'd' (baixo).
+            distance (float): Distância a ser percorrida (em metros). Padrão: 1.0.
+        """
+        delta_x_body = 0.0
+        delta_y_body = 0.0
+        delta_z_body = 0.0
 
-        # Publica setpoints de posição se estiver em modo offboard
+        direction = direction.lower()
+        if direction == 'f':
+            delta_x_body = distance
+            self.get_logger().info("Moving forward")
+        elif direction == 'b':
+            delta_x_body = -distance
+            self.get_logger().info("Moving backward")
+        elif direction == 'l':
+            delta_y_body = -distance
+            self.get_logger().info("Moving left")
+        elif direction == 'r':
+            delta_y_body = distance
+            self.get_logger().info("Moving right")
+        elif direction == 'u':
+            delta_z_body = -distance 
+            self.get_logger().info("Moving up")
+        elif direction == 'd':
+            delta_z_body = distance
+            self.get_logger().info("Moving down")
+        else:
+            self.get_logger().warn(f"Invalid move direction: {direction}")
+            return
+
+        if direction in ['f', 'b', 'l', 'r']:
+            delta_x_world = delta_x_body * math.cos(self.yaw_setpoint) - delta_y_body * math.sin(self.yaw_setpoint)
+            delta_y_world = delta_x_body * math.sin(self.yaw_setpoint) + delta_y_body * math.cos(self.yaw_setpoint)
+        else:
+            delta_x_world = 0.0
+            delta_y_world = 0.0
+
+        target_x = self.vehicle_local_position.x + delta_x_world
+        target_y = self.vehicle_local_position.y + delta_y_world
+        target_z = self.vehicle_local_position.z + delta_z_body
+
+        # Publicar o novo setpoint
+        self.publish_position_setpoint(target_x, target_y, target_z)
+
+    def rotate(self, direction: str) -> None:
+        """
+        Rotaciona o drone no eixo Z (yaw).
+
+        Args:
+            direction (str): Direção da rotação:
+                'cc' → sentido anti-horário,
+                'c' → sentido horário.
+        """
+        direction = direction.lower()
+        if direction == 'cc':
+            # Rotate counter-clockwise
+            self.yaw_setpoint -= 0.174533  # 10 graus
+            self.get_logger().info("Rotating counter-clockwise")
+        elif direction == 'c':
+            # Rotate clockwise
+            self.yaw_setpoint += 0.174533  # 10 graus
+            self.get_logger().info("Rotating clockwise")
+        
+        self.publish_position_setpoint(self.vehicle_local_position.x, self.vehicle_local_position.y, 
+                                           self.vehicle_local_position.z)
+    
+    def return_to_home(self) -> None:
+        """
+        Envia comando para retornar à posição inicial de decolagem (RTL).
+        Também reseta o yaw para 90 graus.
+        """
+        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_RETURN_TO_LAUNCH)
+        self.yaw_setpoint = 1.57079
+        self.get_logger().info("Return to home command sent")
+        
+    def takeoff(self) -> None:
+        """Inicia o processo de decolagem do drone no modo offboard."""
         if self.offboard_mode and self.takeoff_active:
-            self.publish_position_setpoint(0.0, 0.0, self.takeoff_height)
+            self.publish_position_setpoint(0.0, 0.0, self.TAKEOFF_HEIGHT)
             current_altitude = self.vehicle_local_position.z
-            if abs(current_altitude - self.takeoff_height) < 0.5:
+            if abs(current_altitude - self.TAKEOFF_HEIGHT) < 0.5:
                 self.get_logger().info("Altura de decolagem atingida")
                 self.takeoff_active = False
+        
+    def land(self) -> None:
+        """
+        Envia comando para iniciar o pouso automático do drone.
+        """
+        self.publish_vehicle_command(VehicleCommand.VEHICLE_CMD_NAV_LAND)
+        self.get_logger().info("Land command sent")
+
+    def timer_callback(self):
+        """Função chamada periodicamente pelo timer para processar entradas do usuário e controlar o drone."""
+        try:
+            key = sys.stdin.read(1)
+        except IOError:
+            key = None
+
+        # Alterna entre armar/desarmar
+        if key == ' ':
+            if self.armed:
+                self.get_logger().info("Desarmando o veículo")
+                self.disarm()
+                self.armed = False
+                self.offboard_mode = False
+                self.takeoff_active = False
+            else:
+                self.get_logger().info("Armando o veículo")
+                self.arm()
+                self.engage_offboard_mode()
+                self.armed = True
+                self.offboard_mode = True
+
+        # Ações com o drone já armado e em modo offboard
+        if self.armed and self.offboard_mode:
+
+            # Iniciar decolagem
+            if key == 't':
+                self.takeoff_active = True
+                self.get_logger().info("Iniciando decolagem")
+            if self.takeoff_active:
+                self.takeoff()
+
+            # Após atingir altitude mínima, habilitar comandos de movimento
+            can_move = self.vehicle_local_position.z <= self.MIN_TAKEOFF_HEIGHT and not self.takeoff_active
+
+            if can_move and key:
+                key_action_map = {
+                    'l': ("Iniciando pouso", self.land),
+                    'w': ("Movendo para frente", lambda: self.move('f')),
+                    's': ("Movendo para trás", lambda: self.move('b')),
+                    'a': ("Movendo para a esquerda", lambda: self.move('l')),
+                    'd': ("Movendo para a direita", lambda: self.move('r')),
+                    'c': ("Movendo para cima", lambda: self.move('u')),
+                    'v': ("Movendo para baixo", lambda: self.move('d')),
+                    'z': ("Girando anti-horário", lambda: self.rotate('cc')),
+                    'x': ("Girando horário", lambda: self.rotate('c')),
+                    'h': ("Return to home", self.return_to_home),
+                }
+                
+                # Mapeia a tecla pressionada para a ação correspondente
+                action = key_action_map.get(key)
+                if action:
+                    msg, func = action
+                    self.get_logger().info(msg)
+                    func()
+
+        # Publicar heartbeat e setpoints
+        self.publish_offboard_control_heartbeat_signal()
 
 def main(args=None) -> None:
     print('Starting offboard control node...')
